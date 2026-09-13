@@ -15,6 +15,13 @@ export type VoteGame = {
   options: VoteOption[];
 };
 
+export type GachaItem = {
+  name: string;
+  emoji: string;
+  rarity: string;
+  priceK: number;
+};
+
 export const voteGames: VoteGame[] = [
   {
     slug: "red-flag-nguoi-yeu-cu",
@@ -54,13 +61,14 @@ export const voteGames: VoteGame[] = [
   }
 ];
 
-export const gachaItems = [
-  { name: "Cơm tấm", emoji: "🍖", rarity: "QUỐC DÂN" },
-  { name: "Bún bò", emoji: "🍜", rarity: "QUỐC DÂN" },
-  { name: "Phở", emoji: "🥢", rarity: "HIẾM" },
-  { name: "Cơm gà", emoji: "🍗", rarity: "QUỐC DÂN" },
-  { name: "Sushi", emoji: "🍣", rarity: "CỰC PHẨM" },
-  { name: "Lẩu", emoji: "🍲", rarity: "HIẾM" },
-  { name: "Bánh mì", emoji: "🥖", rarity: "QUỐC DÂN" },
-  { name: "Steak", emoji: "🥩", rarity: "TỐI MẬT" }
+export const gachaItems: GachaItem[] = [
+  { name: "Bánh mì", emoji: "🥖", rarity: "QUỐC DÂN", priceK: 30 },
+  { name: "Xôi mặn", emoji: "🍚", rarity: "QUỐC DÂN", priceK: 30 },
+  { name: "Cơm tấm", emoji: "🍖", rarity: "QUỐC DÂN", priceK: 50 },
+  { name: "Bún bò", emoji: "🍜", rarity: "QUỐC DÂN", priceK: 50 },
+  { name: "Phở", emoji: "🥢", rarity: "HIẾM", priceK: 50 },
+  { name: "Cơm gà", emoji: "🍗", rarity: "QUỐC DÂN", priceK: 50 },
+  { name: "Sushi", emoji: "🍣", rarity: "CỰC PHẨM", priceK: 100 },
+  { name: "Lẩu", emoji: "🍲", rarity: "HIẾM", priceK: 100 },
+  { name: "Steak", emoji: "🥩", rarity: "TỐI MẬT", priceK: 200 }
 ];
