@@ -1,17 +1,30 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { gachaItems, voteGames, type VoteGame } from "@/lib/games";
 
 type Tab = "vote" | "gacha" | "room";
+type Budget = "30K" | "50K" | "100K" | "Tất tay";
+type ShareStatus = "idle" | "shared" | "copied" | "cancelled" | "manual";
 
 type VoteResult = {
   gameSlug: string;
   optionId: string;
 };
 
+const BUDGET_LIMITS: Record<Budget, number> = {
+  "30K": 30,
+  "50K": 50,
+  "100K": 100,
+  "Tất tay": Number.POSITIVE_INFINITY
+};
+
 function formatCompact(value: number) {
   return new Intl.NumberFormat("vi-VN", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+function makeRoomCode() {
+  return Math.random().toString(36).slice(2, 7).toUpperCase();
 }
 
 function resultFor(game: VoteGame, selected: string) {
@@ -26,9 +39,54 @@ function resultFor(game: VoteGame, selected: string) {
   }));
 }
 
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through to the legacy copy path for browsers/webviews that expose
+      // navigator.clipboard but deny permission at runtime.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+
+  if (!copied) throw new Error("Clipboard unavailable");
+}
+
+async function shareOrCopy(title: string, text: string, url: string): Promise<ShareStatus> {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text, url });
+      return "shared";
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
+    }
+  }
+
+  const payload = `${text} ${url}`;
+  try {
+    await copyText(payload);
+    return "copied";
+  } catch {
+    window.prompt("Copy link này để chia sẻ:", payload);
+    return "manual";
+  }
+}
+
 function VoteArena() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [result, setResult] = useState<VoteResult | null>(null);
+  const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const game = voteGames[activeIndex];
   const percentages = result?.gameSlug === game.slug ? resultFor(game, result.optionId) : null;
   const chosen = percentages?.find((item) => item.id === result?.optionId);
@@ -36,13 +94,15 @@ function VoteArena() {
   const shareResult = async () => {
     if (!chosen) return;
     const text = `Tôi thuộc ${chosen.percent}% người chọn ${chosen.emoji} ${chosen.label} trên CHỐT! Bạn thuộc phe nào?`;
-    if (navigator.share) {
-      await navigator.share({ title: "CHỐT!", text, url: window.location.href });
-    } else {
-      await navigator.clipboard.writeText(`${text} ${window.location.href}`);
-      alert("Đã copy kết quả để bạn quăng vào group 😎");
-    }
+    const status = await shareOrCopy("CHỐT!", text, window.location.href);
+    setShareStatus(status);
   };
+
+  const shareLabel = shareStatus === "copied"
+    ? "Đã copy ✓"
+    : shareStatus === "manual"
+      ? "Link đã hiện để copy"
+      : "Quăng vào group ↗";
 
   return (
     <section className="arena" aria-label="Vote cộng đồng">
@@ -59,7 +119,10 @@ function VoteArena() {
             <button
               className="vote-option"
               key={option.id}
-              onClick={() => setResult({ gameSlug: game.slug, optionId: option.id })}
+              onClick={() => {
+                setResult({ gameSlug: game.slug, optionId: option.id });
+                setShareStatus("idle");
+              }}
             >
               <span>{option.emoji}</span>
               <strong>{option.label}</strong>
@@ -91,8 +154,8 @@ function VoteArena() {
             ))}
           </div>
           <div className="result-actions">
-            <button className="primary" onClick={shareResult}>Quăng vào group ↗</button>
-            <button className="ghost" onClick={() => setResult(null)}>Chọn lại</button>
+            <button className="primary" onClick={shareResult}>{shareLabel}</button>
+            <button className="ghost" onClick={() => { setResult(null); setShareStatus("idle"); }}>Chọn lại</button>
           </div>
           <small className="demo-note">Số lượt hiện tại là dữ liệu mẫu cho MVP, chưa phải realtime.</small>
         </div>
@@ -104,7 +167,7 @@ function VoteArena() {
             key={item.slug}
             className={index === activeIndex ? "active" : ""}
             aria-label={`Mở câu hỏi ${index + 1}`}
-            onClick={() => { setActiveIndex(index); setResult(null); }}
+            onClick={() => { setActiveIndex(index); setResult(null); setShareStatus("idle"); }}
           />
         ))}
       </div>
@@ -113,16 +176,27 @@ function VoteArena() {
 }
 
 function Gacha() {
-  const [result, setResult] = useState(gachaItems[0]);
+  const [budget, setBudget] = useState<Budget>("50K");
+  const eligibleItems = useMemo(
+    () => gachaItems.filter((item) => item.priceK <= BUDGET_LIMITS[budget]),
+    [budget]
+  );
+  const [result, setResult] = useState(() => gachaItems.find((item) => item.priceK <= 50) ?? gachaItems[0]);
   const [rolling, setRolling] = useState(false);
-  const [budget, setBudget] = useState("50K");
+
+  const chooseBudget = (nextBudget: Budget) => {
+    if (rolling) return;
+    const pool = gachaItems.filter((item) => item.priceK <= BUDGET_LIMITS[nextBudget]);
+    setBudget(nextBudget);
+    setResult(pool[Math.floor(Math.random() * pool.length)] ?? gachaItems[0]);
+  };
 
   const roll = () => {
-    if (rolling) return;
+    if (rolling || eligibleItems.length === 0) return;
     setRolling(true);
     let ticks = 0;
     const timer = window.setInterval(() => {
-      setResult(gachaItems[Math.floor(Math.random() * gachaItems.length)]);
+      setResult(eligibleItems[Math.floor(Math.random() * eligibleItems.length)]);
       ticks += 1;
       if (ticks > 12) {
         window.clearInterval(timer);
@@ -140,15 +214,22 @@ function Gacha() {
       <h2>Đừng nghĩ nữa. Mở hòm đi.</h2>
       <p>Chọn ngân sách rồi để định mệnh quyết định bữa trưa.</p>
       <div className="budget-row">
-        {["30K", "50K", "100K", "Tất tay"].map((item) => (
-          <button className={budget === item ? "active" : ""} onClick={() => setBudget(item)} key={item}>{item}</button>
+        {(["30K", "50K", "100K", "Tất tay"] as Budget[]).map((item) => (
+          <button
+            className={budget === item ? "active" : ""}
+            onClick={() => chooseBudget(item)}
+            key={item}
+            disabled={rolling}
+          >
+            {item}
+          </button>
         ))}
       </div>
       <div className={`gacha-box ${rolling ? "rolling" : ""}`}>
         <span className="rarity">{result.rarity}</span>
         <div className="food-emoji">{result.emoji}</div>
         <strong>{result.name}</strong>
-        <small>Ngân sách {budget}</small>
+        <small>{budget === "Tất tay" ? `Khoảng ${result.priceK}K+` : `Hợp kèo ${budget} · khoảng ${result.priceK}K`}</small>
       </div>
       <button className="roll-button" onClick={roll} disabled={rolling}>
         {rolling ? "Đang quay..." : "QUAY NGAY ✦"}
@@ -158,27 +239,37 @@ function Gacha() {
   );
 }
 
-function GroupRoom() {
-  const [roomCode, setRoomCode] = useState("");
-  const [copied, setCopied] = useState(false);
-  const roomUrl = useMemo(() => roomCode ? `${typeof window !== "undefined" ? window.location.origin : ""}/?room=${roomCode}` : "", [roomCode]);
+type GroupRoomProps = {
+  roomCode: string;
+  onCreateRoom: () => void;
+};
 
-  const createRoom = () => {
-    const code = Math.random().toString(36).slice(2, 7).toUpperCase();
-    setRoomCode(code);
-    setCopied(false);
-  };
+function GroupRoom({ roomCode, onCreateRoom }: GroupRoomProps) {
+  const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
+  const roomUrl = useMemo(() => {
+    if (!roomCode || typeof window === "undefined") return "";
+    const url = new URL(window.location.href);
+    url.searchParams.set("room", roomCode);
+    url.hash = "";
+    return url.toString();
+  }, [roomCode]);
+
+  useEffect(() => {
+    setShareStatus("idle");
+  }, [roomCode]);
 
   const shareRoom = async () => {
     if (!roomCode) return;
     const text = `Vào room ${roomCode} trên CHỐT! rồi vote kín. Đủ người mới reveal 😈`;
-    if (navigator.share) {
-      await navigator.share({ title: `Room ${roomCode}`, text, url: roomUrl });
-    } else {
-      await navigator.clipboard.writeText(`${text} ${roomUrl}`);
-      setCopied(true);
-    }
+    const status = await shareOrCopy(`Room ${roomCode}`, text, roomUrl);
+    setShareStatus(status);
   };
+
+  const shareLabel = shareStatus === "copied"
+    ? "Đã copy link ✓"
+    : shareStatus === "manual"
+      ? "Copy link trong popup ✓"
+      : "Mời hội bạn ↗";
 
   return (
     <section className="arena room-arena">
@@ -192,15 +283,15 @@ function GroupRoom() {
       {!roomCode ? (
         <div className="room-empty">
           <div className="avatar-stack" aria-hidden="true"><span>😎</span><span>👀</span><span>🤡</span><span>+?</span></div>
-          <button className="roll-button" onClick={createRoom}>TẠO ROOM MỚI ✦</button>
+          <button className="roll-button" onClick={onCreateRoom}>TẠO ROOM MỚI ✦</button>
         </div>
       ) : (
         <div className="room-card">
           <span className="room-label">MÃ PHÒNG</span>
           <strong className="room-code">{roomCode}</strong>
-          <div className="room-status"><span className="pulse" /> 1/5 người đã vào</div>
-          <button className="primary" onClick={shareRoom}>{copied ? "Đã copy link ✓" : "Mời hội bạn ↗"}</button>
-          <button className="ghost" onClick={createRoom}>Tạo mã khác</button>
+          <div className="room-status"><span className="pulse" /> Bạn đang ở room này · 1/5 người</div>
+          <button className="primary" onClick={shareRoom}>{shareLabel}</button>
+          <button className="ghost" onClick={onCreateRoom}>Tạo mã khác</button>
           <small className="demo-note">MVP hiện tạo/share room ở phía client. Realtime sync sẽ nối backend ở bước kế tiếp.</small>
         </div>
       )}
@@ -210,6 +301,36 @@ function GroupRoom() {
 
 export default function ViralApp() {
   const [tab, setTab] = useState<Tab>("vote");
+  const [roomCode, setRoomCode] = useState("");
+
+  const createRoom = () => {
+    setRoomCode(makeRoomCode());
+  };
+
+  const openRoom = () => {
+    setTab("room");
+    setRoomCode((current) => current || makeRoomCode());
+    window.setTimeout(() => {
+      document.getElementById("play")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+
+  useEffect(() => {
+    const invitedCode = new URLSearchParams(window.location.search)
+      .get("room")
+      ?.trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 8);
+
+    if (!invitedCode) return;
+
+    setRoomCode(invitedCode);
+    setTab("room");
+    window.requestAnimationFrame(() => {
+      document.getElementById("play")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, []);
 
   return (
     <main>
@@ -220,7 +341,7 @@ export default function ViralApp() {
           <a href="#trending">Đang hot</a>
           <a href="#how">Cách chơi</a>
         </nav>
-        <button className="header-cta" onClick={() => setTab("room")}>+ Tạo room</button>
+        <button className="header-cta" onClick={openRoom}>+ Tạo room</button>
       </header>
 
       <section className="hero" id="top">
@@ -251,7 +372,7 @@ export default function ViralApp() {
         </div>
         {tab === "vote" && <VoteArena />}
         {tab === "gacha" && <Gacha />}
-        {tab === "room" && <GroupRoom />}
+        {tab === "room" && <GroupRoom roomCode={roomCode} onCreateRoom={createRoom} />}
       </section>
 
       <section className="how" id="how">
